@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <algorithm>
 #include <exedit.hpp>
 
@@ -14,19 +14,60 @@ static int track_scale[track_n] = { 10, 10, 10, 10 };
 constexpr int check_n = 0;
 
 BOOL func_proc(ExEdit::Filter* efp, ExEdit::FilterProcInfo* efpip) {
+    int next_track_values[track_n];
+    int* next_track = next_track_values;
 
-    int volume = (max(0, efp->track[0]) << 9) / 125;
-    int left = max(0, efp->track[2]) * volume / 1000;
-    int right = max(0, efp->track[3]) * volume / 1000;
-
-    if (2 <= efpip->audio_ch) {
-        int lr = std::clamp(efp->track[1], efp->track_s[1], efp->track_e[1]);
-        if (lr < 0) {
-            right = right * (lr + 1000) / 1000;
-        } else if (0 < lr) {
-            left = left * (1000 - lr) / 1000;
+    int tl_nextframe, tl_nextsubframe;
+    if (efpip->audio_speed == 0) {
+        tl_nextframe = min(efpip->frame_num + 1, efp->frame_end_chain);
+        tl_nextsubframe = 0;
+    } else {
+        int tl_nextmilli = min(efpip->audio_milliframe + efpip->audio_speed / 1000, efp->frame_end_chain * 1000);
+        tl_nextframe = tl_nextmilli / 1000;
+        tl_nextsubframe = (tl_nextmilli % 1000) / 10;
+    }
+    efp->exfunc->calc_trackbar(efp->processing, tl_nextframe, tl_nextsubframe, next_track_values, nullptr);
+    
+    double d_volume = (double)max(0, efp->track[0]) * 4.096;
+    double d_right = (double)max(0, efp->track[2]) * d_volume * 0.001;
+    double d_left = (double)max(0, efp->track[3]) * d_volume * 0.001;
+    if (efpip->audio_ch == 2) {
+        int lr = std::clamp(efp->track[1], -1000, 1000);
+        if (0 < lr) {
+            d_right *= (double)(1000 - lr) * 0.001;
+        } else if (lr < 0) {
+            d_left *= (double)(lr + 1000) * 0.001;
         }
     }
+    double next_volume = (double)max(0, next_track[0]) * 4.096;
+    double next_right = (double)max(0, next_track[2]) * next_volume * 0.001;
+    double next_left = (double)max(0, next_track[3]) * next_volume * 0.001;
+    if (efpip->audio_ch == 2) {
+        int lr = std::clamp(next_track[1], -1000, 1000);
+        if (0 < lr) {
+            next_right *= (double)(1000 - lr) * 0.001;
+        } else if (lr < 0) {
+            next_left *= (double)(lr + 1000) * 0.001;
+        }
+    }
+
+    double step = 65536.0 / (double)efpip->audio_n;
+    int step_o = (int)((next_volume - d_volume) * step);
+    int step_r = (int)((next_right - d_right) * step);
+    int step_l = (int)((next_left - d_left) * step);
+
+    int other = (int)d_volume;
+    int right = (int)d_right;
+    int left = (int)d_left;
+
+    int volume_fo = (int)((d_volume - (double)other) * 65536.0);
+    int volume_fr = (int)((d_right - (double)right) * 65536.0);
+    int volume_fl = (int)((d_left - (double)left) * 65536.0);
+
+    short* volume_fho = (short*)&volume_fo + 1;
+    short* volume_fhr = (short*)&volume_fr + 1;
+    short* volume_fhl = (short*)&volume_fl + 1;
+
     short* audiop;
     if ((byte)efp->flag & (byte)(ExEdit::Filter::Flag::Effect)) {
         audiop = efpip->audio_data;
@@ -37,32 +78,39 @@ BOOL func_proc(ExEdit::Filter* efp, ExEdit::FilterProcInfo* efpip) {
     switch (efpip->audio_ch) {
     case 1: {
         for (int i = efpip->audio_n; 0 < i; i--) {
-            *audiop = std::clamp(*audiop * volume >> 12, SHRT_MIN, SHRT_MAX);
+            *audiop = (short)std::clamp((int)*audiop * (other + *volume_fho) >> 12, SHRT_MIN, SHRT_MAX);
             audiop++;
+            volume_fo += step_o;
         }
     }break;
     case 2: {
         for (int i = efpip->audio_n; 0 < i; i--) {
-            *audiop = std::clamp(*audiop * left >> 12, SHRT_MIN, SHRT_MAX);
+            *audiop = (short)std::clamp((int)*audiop * (right + *volume_fhr) >> 12, SHRT_MIN, SHRT_MAX);
             audiop++;
-            *audiop = std::clamp(*audiop * right >> 12, SHRT_MIN, SHRT_MAX);
+            volume_fr += step_r;
+
+            *audiop = (short)std::clamp((int)*audiop * (left + *volume_fhl) >> 12, SHRT_MIN, SHRT_MAX);
             audiop++;
+            volume_fl += step_l;
         }
     }break;
     default: {
         for (int i = efpip->audio_n; 0 < i; i--) {
-            *audiop = std::clamp(*audiop * left >> 12, SHRT_MIN, SHRT_MAX);
+            *audiop = (short)std::clamp((int)*audiop * (right + *volume_fhr) >> 12, SHRT_MIN, SHRT_MAX);
             audiop++;
-            *audiop = std::clamp(*audiop * right >> 12, SHRT_MIN, SHRT_MAX);
+            volume_fr += step_r;
+
+            *audiop = (short)std::clamp((int)*audiop * (left + *volume_fhl) >> 12, SHRT_MIN, SHRT_MAX);
             audiop++;
+            volume_fl += step_l;
             for (int j = efpip->audio_ch - 2; 0 < j; j--) {
-                *audiop = std::clamp(*audiop * volume >> 12, SHRT_MIN, SHRT_MAX);
+                *audiop = (short)std::clamp((int)*audiop * (other + *volume_fho) >> 12, SHRT_MIN, SHRT_MAX);
                 audiop++;
             }
+            volume_fo += step_o;
         }
     }break;
     }
-
     return TRUE;
 }
 
