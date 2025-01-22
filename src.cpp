@@ -13,7 +13,7 @@ static int track_scale[track_n] = { 10, 10, 10, 10 };
 
 constexpr int check_n = 0;
 
-/* スクリプトのような仕組みで呼ばれた場合、Object*にデータが存在しないことになり、右トラックが存在しない
+/* スクリプトのような仕組みで呼ばれた場合、Object*にデータがなく右トラックが存在しないためcalc_trackbarによる次フレームの値取得は正常に行えない
    efp->processingから取得したFilter*がefpと異なる場合、そのようなものの可能性が高い
 */
 BOOL check_efp_processing(ExEdit::Filter* efp) {
