@@ -13,20 +13,33 @@ static int track_scale[track_n] = { 10, 10, 10, 10 };
 
 constexpr int check_n = 0;
 
+/* スクリプトのような仕組みで呼ばれた場合、Object*にデータが存在しないことになり、右トラックが存在しない
+   efp->processingから取得したFilter*がefpと異なる場合、そのようなものの可能性が高い
+*/
+BOOL check_efp_processing(ExEdit::Filter* efp) {
+    if ((int)efp->processing == 0) return FALSE;
+    if (*reinterpret_cast<int*>((int)efp->exedit_fp->dll_hinst + 0x1e0fa0) < LOWORD(efp->processing)) return FALSE;
+    if (12 <= HIWORD(efp->processing)) return FALSE;
+    return efp == reinterpret_cast<ExEdit::Filter*(__cdecl*)(ExEdit::ObjectFilterIndex)>((int)efp->exedit_fp->dll_hinst + 0x47b00)(efp->processing);
+}
+
 BOOL func_proc(ExEdit::Filter* efp, ExEdit::FilterProcInfo* efpip) {
     int next_track_values[track_n];
     int* next_track = next_track_values;
-
-    int tl_nextframe, tl_nextsubframe;
-    if (efpip->audio_speed == 0) {
-        tl_nextframe = min(efpip->frame_num + 1, efp->frame_end_chain);
-        tl_nextsubframe = 0;
+    if (check_efp_processing(efp)) {
+        int tl_nextframe, tl_nextsubframe;
+        if (efpip->audio_speed == 0) {
+            tl_nextframe = min(efpip->frame_num + 1, efp->frame_end_chain);
+            tl_nextsubframe = 0;
+        } else {
+            int tl_nextmilli = min(efpip->audio_milliframe + efpip->audio_speed / 1000, efp->frame_end_chain * 1000);
+            tl_nextframe = tl_nextmilli / 1000;
+            tl_nextsubframe = (tl_nextmilli % 1000) / 10;
+        }
+        efp->exfunc->calc_trackbar(efp->processing, tl_nextframe, tl_nextsubframe, next_track_values, nullptr);
     } else {
-        int tl_nextmilli = min(efpip->audio_milliframe + efpip->audio_speed / 1000, efp->frame_end_chain * 1000);
-        tl_nextframe = tl_nextmilli / 1000;
-        tl_nextsubframe = (tl_nextmilli % 1000) / 10;
+        next_track = efp->track;
     }
-    efp->exfunc->calc_trackbar(efp->processing, tl_nextframe, tl_nextsubframe, next_track_values, nullptr);
     
     double d_volume = (double)max(0, efp->track[0]) * 4.096;
     double d_right = (double)max(0, efp->track[2]) * d_volume * 0.001;
